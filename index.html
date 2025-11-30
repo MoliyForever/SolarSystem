@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>CINEMATIC SPACE - SOLAR SYSTEM FINAL</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; }
+        #info {
+            position: absolute;
+            bottom: 30px;
+            width: 100%;
+            text-align: center;
+            color: rgba(255, 255, 255, 0.4);
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 12px;
+            pointer-events: none;
+            letter-spacing: 4px;
+            text-transform: uppercase;
+        }
+    </style>
+</head>
+<body>
+    <div id="info">Cinematic Render // Solar System // Realtime Shader</div>
+
+    <!-- 1. 引入 Three.js 核心 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- 2. 引入 控制器 -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <!-- 3. 引入 后期处理必要的库 -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/RenderPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/ShaderPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/CopyShader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
+
+    <!-- 4. 自定义太阳着色器 (GLSL) -->
+    <script id="sun-vertex" type="x-shader/x-vertex">
+        varying vec2 vUv;
+        varying vec3 vPosition;
+        void main() {
+            vUv = uv;
+            vPosition = position;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+    </script>
+
+    <script id="sun-fragment" type="x-shader/x-fragment">
+        uniform float time;
+        varying vec2 vUv;
+        varying vec3 vPosition;
+
+        float noise(vec3 p) {
+            vec3 i = floor(p);
+            vec3 f = fract(p);
+            f = f * f * (3.0 - 2.0 * f);
+            return mix(mix(mix(fract(sin(dot(i + vec3(0, 0, 0), vec3(12.9898, 78.233, 37.719))) * 43758.5453),
+                               fract(sin(dot(i + vec3(1, 0, 0), vec3(12.9898, 78.233, 37.719))) * 43758.5453), f.x),
+                           mix(fract(sin(dot(i + vec3(0, 1, 0), vec3(12.9898, 78.233, 37.719))) * 43758.5453),
+                               fract(sin(dot(i + vec3(1, 1, 0), vec3(12.9898, 78.233, 37.719))) * 43758.5453), f.x), f.y),
+                       mix(mix(fract(sin(dot(i + vec3(0, 0, 1), vec3(12.9898, 78.233, 37.719))) * 43758.5453),
+                               fract(sin(dot(i + vec3(1, 0, 1), vec3(12.9898, 78.233, 37.719))) * 43758.5453), f.x),
+                           mix(fract(sin(dot(i + vec3(0, 1, 1), vec3(12.9898, 78.233, 37.719))) * 43758.5453),
+                               fract(sin(dot(i + vec3(1, 1, 1), vec3(12.9898, 78.233, 37.719))) * 43758.5453), f.x), f.y), f.z);
+        }
+
+        void main() {
+            vec3 baseColor = vec3(1.0, 0.8, 0.4); 
+            float n = noise(vPosition * 0.2 + time * 0.5);
+            float n2 = noise(vPosition * 0.5 - time * 0.2);
+            float intensity = 1.2 + (n * 0.5 + n2 * 0.5); 
+            vec3 color = baseColor * intensity;
+            if(intensity > 1.6) color = vec3(1.0, 1.0, 1.0);
+            gl_FragColor = vec4(color, 1.0);
+        }
+    </script>
+
+    <!-- 5. 太阳大气层着色器 -->
+    <script id="glow-vertex" type="x-shader/x-vertex">
+        varying vec3 vNormal;
+        varying vec3 vViewPosition;
+        void main() {
+            vNormal = normalize(normalMatrix * normal);
+            vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+            vViewPosition = -mvPosition.xyz;
+            gl_Position = projectionMatrix * mvPosition;
+        }
+    </script>
+
+    <script id="glow-fragment" type="x-shader/x-fragment">
+        varying vec3 vNormal;
+        varying vec3 vViewPosition;
+        void main() {
+            vec3 normal = normalize(vNormal);
+            vec3 viewDir = normalize(vViewPosition);
+            float dotProduct = dot(normal, viewDir);
+            float glow = 1.0 - dotProduct;
+            glow = pow(glow, 4.0); 
+            gl_FragColor = vec4(1.0, 0.5, 0.0, glow * 0.8);
+        }
+    </script>
+
+    <script>
+        // === 1. 初始化场景 ===
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x000000);
+
+        const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 3000);
+        camera.position.set(0, 60, 200); 
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 0.8;
+        document.body.appendChild(renderer.domElement);
+
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.autoRotate = true;
+        controls.autoRotateSpeed = 0.2; 
+
+        // === 2. 太阳 ===
+        const sunGeo = new THREE.SphereGeometry(10, 64, 64);
+        const sunMat = new THREE.ShaderMaterial({
+            vertexShader: document.getElementById('sun-vertex').textContent,
+            fragmentShader: document.getElementById('sun-fragment').textContent,
+            uniforms: { time: { value: 0 } },
+            side: THREE.DoubleSide
+        });
+        const sun = new THREE.Mesh(sunGeo, sunMat);
+        scene.add(sun);
+
+        const atmGeo = new THREE.SphereGeometry(11.5, 64, 64);
+        const atmMat = new THREE.ShaderMaterial({
+            vertexShader: document.getElementById('glow-vertex').textContent,
+            fragmentShader: document.getElementById('glow-fragment').textContent,
+            side: THREE.BackSide,
+            blending: THREE.AdditiveBlending,
+            transparent: true
+        });
+        const atm = new THREE.Mesh(atmGeo, atmMat);
+        scene.add(atm);
+
+        const sunLight = new THREE.PointLight(0xffffff, 2, 800); 
+        scene.add(sunLight);
+        scene.add(new THREE.AmbientLight(0x404040, 0.05)); 
+
+        // === 3. 后期处理 (Bloom) ===
+        const composer = new THREE.EffectComposer(renderer);
+        const renderPass = new THREE.RenderPass(scene, camera);
+        composer.addPass(renderPass);
+
+        const bloomPass = new THREE.UnrealBloomPass(
+            new THREE.Vector2(window.innerWidth, window.innerHeight), 
+            2.5, 0.4, 0.85
+        );
+        composer.addPass(bloomPass);
+
+        // === 4. 八大行星 ===
+        const planets = [];
+        
+        function createNoiseTexture(color) {
+            const size = 256;
+            const canvas = document.createElement('canvas');
+            canvas.width = size; canvas.height = size;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = color;
+            ctx.fillRect(0,0,size,size);
+            for(let i=0; i<400; i++){
+                ctx.fillStyle = 'rgba(255,255,255,0.1)';
+                ctx.fillRect(Math.random()*size, Math.random()*size, Math.random()*20, 2);
+            }
+            return new THREE.CanvasTexture(canvas);
+        }
+
+        function createPlanet(size, dist, speed, color, hasRing = false) {
+            const container = new THREE.Object3D();
+            scene.add(container);
+            
+            const geo = new THREE.SphereGeometry(size, 32, 32);
+            const mat = new THREE.MeshStandardMaterial({
+                map: createNoiseTexture(color),
+                roughness: 0.8,
+                metalness: 0.2
+            });
+            const mesh = new THREE.Mesh(geo, mat);
+            mesh.position.x = dist;
+            container.add(mesh);
+            
+            const orbitGeo = new THREE.RingGeometry(dist-0.1, dist+0.1, 128);
+            orbitGeo.rotateX(-Math.PI/2);
+            const orbitMat = new THREE.MeshBasicMaterial({ color: 0x333333, side: THREE.DoubleSide, transparent:true, opacity:0.3 });
+            scene.add(new THREE.Mesh(orbitGeo, orbitMat));
+
+            if(hasRing) {
+                const ringGeo = new THREE.RingGeometry(size * 1.4, size * 2.3, 64);
+                const ringMat = new THREE.MeshBasicMaterial({ 
+                    color: color, 
+                    side: THREE.DoubleSide, 
+                    transparent: true, 
+                    opacity: 0.5 
+                });
+                const ring = new THREE.Mesh(ringGeo, ringMat);
+                ring.position.x = dist;
+                ring.rotation.x = -Math.PI / 2 + 0.45; 
+                container.add(ring);
+            }
+
+            planets.push({ container, mesh, speed, angle: Math.random() * 10 });
+        }
+
+        createPlanet(1.2, 22, 0.025, '#A5A5A5'); // 水星
+        createPlanet(1.8, 32, 0.020, '#D4A050'); // 金星
+        createPlanet(2.0, 44, 0.015, '#2266CC'); // 地球
+        createPlanet(1.5, 56, 0.012, '#CC3322'); // 火星
+        // 小行星带位置
+        createPlanet(5.5, 80, 0.008, '#BC987E'); // 木星
+        createPlanet(4.8, 105, 0.006, '#D6C8A8', true); // 土星
+        createPlanet(3.2, 130, 0.004, '#80DEEA'); // 天王星
+        createPlanet(3.0, 150, 0.003, '#3344AA'); // 海王星
+
+        
+        // ==========================================
+        // === 4.5 小行星带 (Asteroid Belt) ===
+        // ==========================================
+        const asteroidGeo = new THREE.BufferGeometry();
+        const asteroidCount = 4000;
+        const asteroidPos = [];
+        const asteroidColors = [];
+        const c1 = new THREE.Color(0x999999);
+        const c2 = new THREE.Color(0x555555);
+
+        for(let i=0; i<asteroidCount; i++) {
+            const r = 60 + Math.random() * 16;
+            const theta = Math.random() * Math.PI * 2;
+            const y = (Math.random() - 0.5) * 3; 
+            const x = r * Math.cos(theta);
+            const z = r * Math.sin(theta);
+            asteroidPos.push(x, y, z);
+            const mixedColor = c1.clone().lerp(c2, Math.random());
+            asteroidColors.push(mixedColor.r, mixedColor.g, mixedColor.b);
+        }
+        asteroidGeo.setAttribute('position', new THREE.Float32BufferAttribute(asteroidPos, 3));
+        asteroidGeo.setAttribute('color', new THREE.Float32BufferAttribute(asteroidColors, 3));
+        const asteroidMat = new THREE.PointsMaterial({
+            size: 0.4, 
+            vertexColors: true,
+            transparent: true,
+            opacity: 0.8
+        });
+        const asteroidBelt = new THREE.Points(asteroidGeo, asteroidMat);
+        scene.add(asteroidBelt);
+
+
+        // ==========================================
+        // === 5. 彗星 ===
+        // ==========================================
+        
+        function createGlowTexture() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 64; canvas.height = 64;
+            const ctx = canvas.getContext('2d');
+            const gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+            gradient.addColorStop(0, 'rgba(255, 255, 255, 1)'); 
+            gradient.addColorStop(0.2, 'rgba(150, 220, 255, 0.8)'); 
+            gradient.addColorStop(0.5, 'rgba(0, 100, 255, 0.1)'); 
+            gradient.addColorStop(1, 'rgba(0, 0, 0, 0)'); 
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0,0,64,64);
+            return new THREE.CanvasTexture(canvas);
+        }
+
+        const glowTexture = createGlowTexture();
+        const cometGroup = new THREE.Group();
+        scene.add(cometGroup);
+
+        const nucleusGeo = new THREE.SphereGeometry(0.3, 16, 16);
+        const nucleusMat = new THREE.MeshBasicMaterial({ color: 0xffffff }); 
+        const nucleus = new THREE.Mesh(nucleusGeo, nucleusMat);
+        cometGroup.add(nucleus);
+
+        const comaMat = new THREE.SpriteMaterial({ 
+            map: glowTexture, 
+            color: 0xccffff, 
+            transparent: true, 
+            opacity: 0.9,
+            blending: THREE.AdditiveBlending 
+        });
+        const coma = new THREE.Sprite(comaMat);
+        coma.scale.set(4, 4, 1); 
+        cometGroup.add(coma);
+
+        const tailLength = 80; 
+        const tailSprites = [];
+        const tailHistory = []; 
+
+        for (let i = 0; i < tailLength; i++) {
+            const spriteMat = new THREE.SpriteMaterial({
+                map: glowTexture,
+                color: 0x0088ff, 
+                transparent: true,
+                opacity: 0,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false
+            });
+            const sprite = new THREE.Sprite(spriteMat);
+            scene.add(sprite);
+            tailSprites.push(sprite);
+            tailHistory.push(new THREE.Vector3(0,0,0));
+        }
+
+        const cometState = { angle: 3.5, speed: 0 }; 
+
+        // === 6. 星空背景 ===
+        const starsGeo = new THREE.BufferGeometry();
+        const starPos = [];
+        for(let i=0; i<3000; i++) {
+            starPos.push((Math.random()-0.5)*1000, (Math.random()-0.5)*1000, (Math.random()-0.5)*1000);
+        }
+        starsGeo.setAttribute('position', new THREE.Float32BufferAttribute(starPos, 3));
+        const starMat = new THREE.PointsMaterial({color: 0xffffff, size: 0.7});
+        scene.add(new THREE.Points(starsGeo, starMat));
+
+
+        // === 7. 动画循环 ===
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const time = performance.now() * 0.001;
+
+            // 太阳 Shader 更新
+            sunMat.uniforms.time.value = time;
+
+            // 行星运动
+            planets.forEach(p => {
+                p.angle += p.speed;
+                p.container.rotation.y = p.angle;
+                p.mesh.rotation.y += 0.01; 
+            });
+
+            // 小行星带缓慢旋转
+            asteroidBelt.rotation.y += 0.001;
+
+            // --- 彗星逻辑更新 (减速修改版) ---
+            const a = 120; // 半长轴
+            const b = 40;  // 半短轴
+            
+            const cx = Math.cos(cometState.angle) * a;
+            const cz = Math.sin(cometState.angle) * b;
+            const cy = Math.sin(cometState.angle) * 15; 
+
+            // 计算速度：根据开普勒定律模拟，近快远慢
+            const dist = Math.sqrt(cx*cx + cy*cy + cz*cz);
+            
+            // --- 核心修改：大幅降低了基数和系数 ---
+            // 之前的速度大约是 0.002 + 150/..., 现在改为 0.0005 + 40/...
+            // 这样它在远日点会非常慢，在近日点加速但也不会快得离谱
+            const currentSpeed = 0.0005 + (40 / (dist * dist + 100));
+            
+            cometState.angle += currentSpeed;
+
+            cometGroup.position.set(cx, cy, cz);
+            
+            tailHistory.unshift(new THREE.Vector3(cx, cy, cz));
+            if(tailHistory.length > tailLength) tailHistory.pop();
+
+            for (let i = 0; i < tailSprites.length; i++) {
+                const sprite = tailSprites[i];
+                const pos = tailHistory[i];
+
+                if (pos && pos.lengthSq() > 1) { 
+                    sprite.position.copy(pos);
+                    
+                    const k = i / tailLength; 
+                    const scale = 3.5 * (1.0 - k * 0.9); 
+                    sprite.scale.set(scale, scale, 1);
+
+                    const opacity = 0.6 * Math.pow(1.0 - k, 1.5);
+                    sprite.material.opacity = opacity;
+
+                } else {
+                    sprite.material.opacity = 0;
+                }
+            }
+            
+            const comaPulse = 4.5 + Math.sin(time * 20) * 0.2;
+            coma.scale.set(comaPulse, comaPulse, 1);
+
+            controls.update();
+            composer.render();
+        }
+
+        animate();
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+    </script>
+</body>
+</html>
